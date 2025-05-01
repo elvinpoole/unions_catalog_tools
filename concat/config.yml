@@ -1,0 +1,7 @@
+# config for UNIONS catalogs
+# contains file paths
+
+base_path: "/arc/projects/unions/catalogues/unions/GAaP_photometry/UNIONS5000/"
+cat_file: "{tile}_{bands}_photoz_ext.cat"
+output_label: "UNIONS5000"
+selection_label: flags_and_mags
