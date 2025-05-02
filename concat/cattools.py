@@ -17,15 +17,14 @@ class ConCat:
     A class to concatenate catalog data from UNIONS survey tiles into a single HDF5 file.
     """
 
-    def __init__(self, bands, maxn, config, verbose=False, do_txpipe_files=True):
+    def __init__(self, bands, maxn, config, verbose=False):
         """
         Initializes the ConCat object by reading config and preparing output filename
 
         Args:
             bands (str): Photometric bands to use, e.g., 'ugri' or 'ugriz'.
             maxn (int or str): Maximum number of tiles to process, or 'auto' to figure it out automatically.
-            config (dict): Configuration loaded from a YAML file, must include 'base_path',
-                           'cat_file', and 'output_label'.
+            config (dict): Configuration loaded from a YAML file
             max_tiles (int or None): set to break all the loops after a few tiles (for testing)
         """
         self.bands = "ugriz"
@@ -34,16 +33,19 @@ class ConCat:
         self.config = config
         self.base_path = self.config.get("base_path")
         self.cat_file = self.config.get("cat_file")
-        self.output_label = self.config.get("output_label")
+        self.concat_output_label = self.config.get("concat_output_label")
+        self.sp_output_label = self.config.get("sp_output_label")
         self.selection = config.get('selection_label')
         self.max_tiles = config.get('max_tiles')
+        self.do_concat_files = config.get('do_concat_files')
+        self.do_txpipe_files = config.get('do_txpipe_files')
         if self.max_tiles is not None:
             print(f'Limiting the catalog to the first {self.max_tiles} tiles found (for testing)')
 
         self.tile_list = os.listdir(self.base_path)
         print(f"{len(self.tile_list)} tiles found")
 
-        self.outfile = f"./{self.output_label}_"+self.cat_file.format(tile=str(datetime.date.today()) ,bands=self.bands) + ".h5"
+        self.outfile = f"./{self.concat_output_label}_"+self.cat_file.format(tile=str(datetime.date.today()) ,bands=self.bands) + ".h5"
         print(f'We will output the concatenated file to {self.outfile}')
 
         #get the dtypes of the columns from an example tile
@@ -51,7 +53,6 @@ class ConCat:
         self.example_dtype = f_example[1].get_rec_dtype()
 
         self.verbose = verbose
-        self.do_txpipe_files = do_txpipe_files
     
     def run(self):
         """
@@ -59,16 +60,17 @@ class ConCat:
         """
         output_cols = self.make_output_col_list()
 
-        if self.maxn == "auto":
-            self.maxn = self.auto_compute_maxn(verbose=self.verbose)
-            self.save_missing_tile_file()
-        else:
-            self.missing_tiles = []
+        #concatenate the individual tile files, making basic cuts
+        if self.do_concat_files:
+            if self.maxn == "auto":
+                self.maxn = self.auto_compute_maxn(verbose=self.verbose)
+                self.save_missing_tile_file()
+            else:
+                self.missing_tiles = []
+            
+            self.select_and_save(output_cols, verbose=self.verbose)
 
-        self.select_and_save(output_cols, verbose=self.verbose)
-
-        # This will additionally the columns needed to run through TXPipe (DESC 2pt pipeline)
-        # Renaming the column names as needed
+        # This will additionally save the files in the format needed to run through TXPipe (DESC 2pt pipeline)
         # TXPipe needs 3 files, photometry, photo-z and shear 
         if self.do_txpipe_files:
             self.save_txpipe_cats()
@@ -142,7 +144,7 @@ class ConCat:
         return np.sum(self.nrows_tot)
 
     def save_missing_tile_file(self):
-        missing_tile_file = open(self.cat_file.format(tile="missing_tiles",bands=self.bands)+'.txt', 'w')
+        missing_tile_file = open(f"{self.concat_output_label}" + self.cat_file.format(tile="missing_tiles",bands=self.bands)+'.txt', 'w')
         missing_tile_file.write('\n'.join(self.missing_tiles))
         missing_tile_file.close()
 
@@ -238,7 +240,7 @@ class ConCat:
     def save_txpipe_cats(self):
 
         #Photometry file details
-        phot_name = f"./txpipe_photometry_{self.output_label}_" + self.cat_file.format(tile=str(datetime.date.today()) ,bands=self.bands) + ".h5"
+        phot_name = f"./txpipe_photometry_{self.concat_output_label}_" + self.cat_file.format(tile=str(datetime.date.today()) ,bands=self.bands) + ".h5"
         phot_col_dict = {
             "ALPHA_J2000":"ra", 
             "DELTA_J2000":"dec",
@@ -257,7 +259,7 @@ class ConCat:
 
         
         #Photo-z file
-        pz_name = f"./txpipe_photoz_{self.output_label}_" + self.cat_file.format(tile=str(datetime.date.today()) ,bands=self.bands) + ".h5"
+        pz_name = f"./txpipe_photoz_{self.concat_output_label}_" + self.cat_file.format(tile=str(datetime.date.today()) ,bands=self.bands) + ".h5"
         pz_col_dict = {
             "Z_B":"zb", 
         }
