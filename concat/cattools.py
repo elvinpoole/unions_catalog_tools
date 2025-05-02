@@ -17,7 +17,7 @@ class ConCat:
     A class to concatenate catalog data from UNIONS survey tiles into a single HDF5 file.
     """
 
-    def __init__(self, bands, maxn, config, max_tiles=None, verbose=False, do_txpipe_files=True):
+    def __init__(self, bands, maxn, config, verbose=False, do_txpipe_files=True):
         """
         Initializes the ConCat object by reading config and preparing output filename
 
@@ -36,6 +36,9 @@ class ConCat:
         self.cat_file = self.config.get("cat_file")
         self.output_label = self.config.get("output_label")
         self.selection = config.get('selection_label')
+        self.max_tiles = config.get('max_tiles')
+        if self.max_tiles is not None:
+            print(f'Limiting the catalog to the first {self.max_tiles} tiles found (for testing)')
 
         self.tile_list = os.listdir(self.base_path)
         print(f"{len(self.tile_list)} tiles found")
@@ -47,7 +50,6 @@ class ConCat:
         f_example = fio.FITS(self.base_path +"/"+ example_tile +"/"+ self.cat_file.format(tile=example_tile, bands=self.bands))
         self.example_dtype = f_example[1].get_rec_dtype()
 
-        self.max_tiles = max_tiles
         self.verbose = verbose
         self.do_txpipe_files = do_txpipe_files
     
@@ -78,7 +80,7 @@ class ConCat:
         Returns:
             list: List of column names to extract from the input catalogs.
         """
-        cols_basic = ["ALPHA_J2000", "DELTA_J2000", "MAG_AUTO", "Z_B", "Flag"]
+        cols_basic = ["ALPHA_J2000", "DELTA_J2000", "MAG_AUTO", "Z_B", "Flag", "Tilename"]
         cols_ap_band = ["MAG_GAAP{ap}_{band}", "MAGERR_GAAP{ap}_{band}",]
         cols_band = ["MAG_LIM_{band}"]
 
@@ -115,7 +117,7 @@ class ConCat:
                 if i >= self.max_tiles:
                     break
             if verbose and i%200 == 0 and i!=0 :
-                print(f"{i}/{len(tile_list)} approx time remaining {time_left}s, mean of last 100 nrows {np.round(np.mean(nrows[-99:]),1)}")
+                print(f"{i}/{len(self.tile_list)} approx time remaining {time_left}s, mean of last 100 nrows {np.round(np.mean(self.nrows_tot[-99:]),1)}")
             
             s = time.time()
             filename = self.cat_file.format(tile=tile, bands=self.bands)
@@ -158,8 +160,12 @@ class ConCat:
             # make empty data sets for each column
             # length of data sets should be >= number of objects in final catalog
             for c in cols:
-                col_dtype = self.example_dtype[0][c] #get from f_example
-                grp.create_dataset(c, shape=(self.maxn,), maxshape=(None,), dtype=col_dtype)        # 64-bit float
+                if c=="Tilename":
+                    string_type = h5py.string_dtype(encoding='utf-8')
+                    grp.create_dataset(c, shape=(self.maxn,), maxshape=(None,), dtype=string_type)
+                else:
+                    col_dtype = self.example_dtype[0][c] #get from f_example
+                    grp.create_dataset(c, shape=(self.maxn,), maxshape=(None,), dtype=col_dtype)        # 64-bit float
         
             deltas = [] #for timing info
             for i, tile in enumerate(self.tile_list):
@@ -167,7 +173,7 @@ class ConCat:
                     if i >= self.max_tiles:
                         break
                 if verbose and i%200 == 0 and i!=0 :
-                    print(f"{i}/{len(tile_list)} approx time remaining {time_left}s, mean of last 100 nrows {np.round(np.mean(nrows[-99:]),1)}")
+                    print(f"{i}/{len(self.tile_list)} approx time remaining {time_left}s, mean of last 100 nrows {np.round(np.mean(self.nrows_tot[-99:]),1)}")
                 
                 s = time.time()
                 filename = self.cat_file.format(tile=tile, bands=self.bands)
@@ -187,7 +193,10 @@ class ConCat:
                     start = sum(self.nrows_masked[:i])
                     end = sum(self.nrows_masked[:i+1])
                     for c in cols:
-                        grp[c][start:end] = f[1][c].read()[mask]
+                        if c=="Tilename":
+                            grp[c][start:end] = tile
+                        else:
+                            grp[c][start:end] = f[1][c].read()[mask]
 
                 #timing stuff
                 e = time.time()
