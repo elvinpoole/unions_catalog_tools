@@ -221,19 +221,20 @@ class ConCat:
             return np.ones(fits_table.get_nrows()).astype('bool')
             
         elif selection == 'flags_and_mags':
-            # select only objects that have flag = 0, mag_flag=0, and mag is not -99 or 99
+            # select only objects that have mag_flag=0 in all bands, and mag is not -99
             # for the ugriz catalog only 1 of z and z2 has to pass (flag and mag)
-            mask = (fits_table['Flag'].read() == 0)
+            #mask = (fits_table['Flag'].read() == 0) #we might not want flag=0, too restrictive
+            mask = np.ones(fits_table.get_nrows()).astype('bool')
             for band in "ugri":
                 mask *= (fits_table[f"FLAG_GAAP_{band}"].read() == 0)
-                mask *= (fits_table[f"MAG_GAAP_{band}"].read() != -99.)
-                mask *= (fits_table[f"MAG_GAAP_{band}"].read() != 99.)
+                mask *= (fits_table[f"MAG_GAAP_{band}"].read() != -99.) 
+                #mask *= (fits_table[f"MAG_GAAP_{band}"].read() != 99.) #+99 are non detections, but fine to include
             if self.bands == "ugriz":
                 mask *= np.logical_or((fits_table["FLAG_GAAP_z"].read() == 0), (fits_table["FLAG_GAAP_z2"].read() == 0) )
                 z1 = fits_table["MAG_GAAP_z"].read()
                 z2 = fits_table["MAG_GAAP_z2"].read()
                 mask *= np.logical_or((z1 != -99.), (z2 != -99.)) #must have a measurement in either z col
-                mask *= np.logical_and((z1 !=  99.), (z2 !=  99.)) #can't have a 99 magnitude in either z col
+                #mask *= np.logical_and((z1 !=  99.), (z2 !=  99.)) #+99 are non detections, but fine to include
 
             return mask
 
