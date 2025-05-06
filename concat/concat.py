@@ -3,7 +3,7 @@ import sys
 import yaml
 import cattools
 
-required_config_var = ["base_path", "cat_file", "output_label"]
+required_config_var = ["base_path", "cat_file", "concat_output_label"]
 
 def main(bands, maxn, config):
     c = cattools.ConCat(bands, maxn, config, verbose=True)

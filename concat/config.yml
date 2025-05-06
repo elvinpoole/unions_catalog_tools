@@ -3,7 +3,7 @@
 
 base_path: "/arc/projects/unions/catalogues/unions/GAaP_photometry/UNIONS5000/"
 cat_file: "{tile}_{bands}_photoz_ext.cat"
-shapepipe_file: "/cfis/weak_lensing/ShapePipe/v1.5.x/unions_shapepipe_cut_struc_2024_v1.5.4.fits"
+shapepipe_file: "unions_shapepipe_cut_struc_2024_v1.5.4.fits"
 concat_output_label: "UNIONS5000"
 sp_output_label: "SP_v1.5.4"
 selection_label: flags_and_mags
