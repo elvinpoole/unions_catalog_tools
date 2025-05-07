@@ -11,6 +11,8 @@ import gc
 import datetime
 from astropy.coordinates import SkyCoord
 import astropy.units as u
+import dask
+import dask.array as da
 
 example_tile = "UNIONS.316.239"
 
@@ -61,20 +63,24 @@ class ConCat:
         self.do_shear_file = config.get('do_shear_file')
         self.do_main_file = config.get('do_main_file')
         self.do_txpipe_files = config.get('do_txpipe_files')
+        self.parallel = config.get('parallel')
         if self.test_mode:
-            print(f'Limiting the catalog to the first 4 tiles found (for testing)')
+            print(f'Running in TEST MODE')
 
-        self.tile_list = os.listdir(self.base_path)
+
+        self.missing_tiles = []
+
+        self.tile_list = os.listdir(self.phot_base_path)
         print(f"{len(self.tile_list)} tiles found")
 
         self.today = str(datetime.date.today())
 
-        self.phot_output_file = f"./{self.run_label}_{self.phot_output_label}_"+self.cat_file.format(tile=self.today ,bands=self.bands) + ".h5"
-        self.shear_output_file = f"./{self.run_label}_{self.shear_output_label}_{self.today}" ,bands=self.bands) + ".h5"
-        self.main_output_file = f"./{self.run_label}_main_{self.shear_output_label}_{self.phot_output_label}_"+self.cat_file.format(tile=self.today ,bands=self.bands) + ".h5"
-        if self.do_concat_files:
+        self.phot_output_file = f"./{self.run_label}_PHOT_{self.phot_output_label}_"+self.phot_input_file.format(tile=self.today ,bands=self.bands) + ".h5"
+        self.shear_output_file = f"./{self.run_label}_SHEAR_{self.shear_output_label}_{self.today}.h5"
+        self.main_output_file = f"./{self.run_label}_MAIN_{self.shear_output_label}_{self.phot_output_label}_"+self.phot_input_file.format(tile=self.today ,bands=self.bands) + ".h5"
+        if self.do_phot_file:
             #get the dtypes of the columns from an example tile
-            f_example = fio.FITS(self.base_path +"/"+ example_tile +"/"+ self.cat_file.format(tile=example_tile, bands=self.bands))
+            f_example = fio.FITS(self.phot_base_path +"/"+ example_tile +"/"+ self.phot_input_file.format(tile=example_tile, bands=self.bands))
             self.example_dtype = f_example[1].get_rec_dtype()
 
         self.verbose = verbose
@@ -87,20 +93,33 @@ class ConCat:
 
         #concatenate the individual tile files, making basic cuts
         if self.do_phot_file:
-            print(f'We will output the catalogs to {self.main_outfile}')
-            if self.maxn == "auto":
-                self.maxn = self.auto_compute_maxn(verbose=self.verbose)
-                self.save_missing_tile_file()
-            else:
-                self.missing_tiles = []
-            
-            self.select_and_save_photometry(phot_cols, verbose=self.verbose)
+            print(f'Will output photometry catalog to {self.phot_output_file}')
+
+            if self.parallel:
+                self.select_and_save_photometry_parallel(phot_cols)
+            else:  
+                if self.maxn == "auto":
+                    self.maxn = self.auto_compute_maxn(verbose=self.verbose)
+                    self.save_missing_tile_file()
+                else:
+                    self.missing_tiles = []
+                    
+                self.select_and_save_photometry_lowmem(phot_cols, verbose=self.verbose)
+        
+        else:
+            print(f'Not generating photometry catalog')
 
         if self.do_shear_file:
+            print(f'Will output shear catalog to {self.shear_output_file}')
             self.save_shear_catalog(sp_cols)
-
+        else:
+            print(f'Not generating shear catalog')
+            
         if self.do_main_file:
+            print(f'Will output main catalog to {self.main_output_file}')
             self.save_main_catalog()
+        else:
+            print(f'Not generating main catalog')
         
         # This will additionally save the files in the format needed to run through TXPipe (DESC 2pt pipeline)
         # TXPipe needs 3 files, photometry, photo-z and shear 
@@ -155,17 +174,16 @@ class ConCat:
         """
         deltas = [] #timing info
         self.nrows_tot = [] #number of rows in each file
-        self.missing_tiles = [] #keep track of the number of missing files
         for i, tile in enumerate(self.tile_list):
             if self.test_mode:
-                if i >= 4:
+                if i >= 6:
                     break
             if verbose and i%200 == 0 and i!=0 :
                 print(f"{i}/{len(self.tile_list)} approx time remaining {time_left}s, mean of last 100 nrows {np.round(np.mean(self.nrows_tot[-99:]),1)}")
             
             s = time.time()
-            filename = self.cat_file.format(tile=tile, bands=self.bands)
-            filepath = self.base_path +"/"+ tile +"/"+ filename
+            filename = self.phot_input_file.format(tile=tile, bands=self.bands)
+            filepath = self.phot_base_path +"/"+ tile +"/"+ filename
         
             #check that file exists
             if not os.path.exists(filepath):
@@ -186,11 +204,18 @@ class ConCat:
         return np.sum(self.nrows_tot)
 
     def save_missing_tile_file(self):
-        missing_tile_file = open(f"{self.run_label}_{self.phot_output_label}" + self.cat_file.format(tile="missing_tiles",bands=self.bands)+'.txt', 'w')
+        missing_tile_file = open(f"{self.run_label}_MISSINGTILES_{self.phot_output_label}_" + self.phot_input_file.format(tile="missing_tiles",bands=self.bands)+'.txt', 'w')
         missing_tile_file.write('\n'.join(self.missing_tiles))
         missing_tile_file.close()
 
-    def select_and_save_photometry(self, cols, verbose=False,):
+    def select_and_save_photometry_lowmem(self, cols, verbose=False,):
+        """
+        Loops through all the catalog files (one for each tile)
+        and saves "cols" to the hdf5 file
+
+        Optimized for low memory use
+        This is not parralelized and will be slow
+        """
 
         self.nrows_masked = [] #number of objects from each file after masking
         self.nrows_unmasked = []
@@ -214,14 +239,14 @@ class ConCat:
             deltas = [] #for timing info
             for i, tile in enumerate(self.tile_list):
                 if self.test_mode:
-                    if i >= 4:
+                    if i >= 6:
                         break
                 if verbose and i%200 == 0 and i!=0 :
                     print(f"{i}/{len(self.tile_list)} approx time remaining {time_left}s, mean of last 100 nrows {np.round(np.mean(self.nrows_tot[-99:]),1)}")
                 
                 s = time.time()
-                filename = self.cat_file.format(tile=tile, bands=self.bands)
-                filepath = self.base_path +"/"+ tile +"/"+ filename
+                filename = self.phot_input_file.format(tile=tile, bands=self.bands)
+                filepath = os.path.join(self.phot_base_path, tile, filename)
             
                 #check that file exists
                 if tile in self.missing_tiles:
@@ -257,10 +282,95 @@ class ConCat:
             # Call it "thisfile" to make it clear this is not a universal ID
             grp.create_dataset("ID_thisfile", data=np.arange(self.ntot_masked) )
 
+        #output.close()
+        
         self.ntot_unmasked = np.sum(self.nrows_unmasked)
         print(f'{self.ntot_unmasked} objects total')
         print(f'{self.ntot_masked} objects passed the selected cuts')
 
+    def select_and_save_photometry_parallel(self, cols, verbose=False,):
+        """
+        Loops through all the catalog files (one for each tile)
+        and saves "cols" to the hdf5 file
+
+        This is an attempt to parralelize the processing with dask 
+        (memory usage will be much larger)
+
+        Does not require maxn input (i think)
+        
+        """
+
+        self.nrows_masked = [] #number of objects from each file after masking
+        self.nrows_unmasked = []
+
+        #open the output photometry file
+        with h5py.File(self.phot_output_file, "w") as output:
+        
+            #make an empty hdf5 group to save the catalogs to 
+            grp = output.create_group("photometry")
+
+            ###### Parallelization starts here
+            futures = [] #will contain a list of processes to be parallelized over tiles
+            for i, tile in enumerate(self.tile_list):
+                if self.test_mode:
+                    if i >= 6:
+                        break
+                
+                filename = self.phot_input_file.format(tile=tile, bands=self.bands)
+                filepath = os.path.join(self.phot_base_path, tile, filename)
+            
+                #check that file exists
+                if tile in self.missing_tiles:
+                    print(f"skipping tile {tile} has no catalog")
+                    continue
+
+                futures.append(self._delayed_process_tile(tile, filepath, cols))
+
+            #start the dask computation
+            results = dask.compute(*futures)
+
+            # Concatenate all column data
+            combined = {c: np.concatenate([r[c] for r in results if r[c].size > 0]) for c in cols}            
+        
+            #add to group
+            for c in cols:
+                grp.create_dataset(c, data=combined[c])
+        
+            self.ntot_masked = len(combined[cols[0]]) if cols else 0
+
+            # Add an ID column
+            # Call it "thisfile" to make it clear this is not a universal ID
+            grp.create_dataset("ID_thisfile", data=np.arange(self.ntot_masked) )
+        
+        print(f'{self.ntot_masked} objects passed the selected cuts')
+
+    def _process_single_tile(self, tile, filepath, cols):
+        """
+        Load a fits file and output dict of the requested columns
+        """
+        try:
+            with fio.FITS(filepath) as f:
+                data = f[1]
+                mask = self.get_mask(data, self.selection)
+                out = {}
+                for c in cols:
+                    if c == "Tilename":
+                        out[c] = np.array([tile] * np.sum(mask), dtype="S20")
+                    else:
+                        out[c] = data[c].read()[mask]
+                return out
+        except Exception as e:
+            print(f"Skipping tile {filepath} due to error: {e}")
+            return {c: np.array([], dtype="f8") for c in cols}
+
+    @dask.delayed
+    def _delayed_process_tile(self, tile, filepath, cols):
+        """
+        Process the tile using dask delay. This method is lazy and 
+        will not be executed until we run the compute()
+        """
+        return self._process_single_tile(tile, filepath, cols)
+    
     def save_shear_catalog(self, cols):
         """
         Loads the shear catalog from fits and saves the requested columns to an hdf5 file
@@ -274,9 +384,9 @@ class ConCat:
             sp_fits_table = fio.FITS(self.shear_input_file)[-1]
 
             for c in cols:
+                print('shear col', c)
                 if self.test_mode:
-                    grp[c] = sp_fits_table[c][:100000].read()
-                    
+                    grp.create_dataset(c, data=sp_fits_table[c].read(rows=range(100000)) )
                 else:
                     grp.create_dataset(c, data=sp_fits_table[c].read() )
 
@@ -357,7 +467,7 @@ class ConCat:
         """
 
         #Photometry file details
-        tx_phot_output_file = f"./{self.run_label}_txpipe_photometry_{self.phot_output_label}" + self.cat_file.format(tile=self.today ,bands=self.bands) + ".h5"
+        tx_phot_output_file = f"./{self.run_label}_txpipe_photometry_{self.phot_output_label}" + self.phot_input_file.format(tile=self.today ,bands=self.bands) + ".h5"
         phot_col_dict = { #matching unions column names to txpipe column names
             "ALPHA_J2000":"ra", 
             "DELTA_J2000":"dec",
@@ -376,7 +486,7 @@ class ConCat:
 
         
         #Photo-z file
-        tx_pz_output_file = f"./{self.run_label}_txpipe_photoz_{self.phot_output_label}" + self.cat_file.format(tile=self.today ,bands=self.bands) + ".h5"
+        tx_pz_output_file = f"./{self.run_label}_txpipe_photoz_{self.phot_output_label}" + self.phot_input_file.format(tile=self.today ,bands=self.bands) + ".h5"
         pz_col_dict = {
             "Z_B":"zb", 
         }
@@ -406,7 +516,7 @@ class ConCat:
                             phot_col_dict[col], 
                             data=np.where(
                                 np.logical_or((z2==99.),(z2==-99.)),
-                                main_out[f'photometry{col}'][:],
+                                main_out[f'photometry/{col}'][:],
                                 main_out[f'photometry/{col}2'][:]),
                             )
                     else:

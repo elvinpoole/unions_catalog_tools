@@ -2,12 +2,27 @@ import argparse
 import sys
 import yaml
 import cattools
+from dask.distributed import Client, LocalCluster
 
-required_config_var = ["base_path", "cat_file", "concat_output_label"]
+required_config_var = []
 
 def main(bands, maxn, config):
-    c = cattools.ConCat(bands, maxn, config, verbose=True)
-    c.run()
+    if config.get('parallel'): 
+        #if running in parallel, start a dask client
+        n_workers = config.get("n_workers", 2)
+        print(f"Starting Dask with {n_workers} workers...")
+        cluster = LocalCluster(n_workers=n_workers, threads_per_worker=1)
+        client = Client(cluster)
+        print(f"Dask dashboard: {client.dashboard_link}")
+    else:
+        client = None
+
+    try:
+        c = cattools.ConCat(bands, maxn, config, verbose=True)
+        c.run()
+    finally:
+        if client is not None:
+            client.close()
 
 def parse_maxn(value):
     if value == "auto":
