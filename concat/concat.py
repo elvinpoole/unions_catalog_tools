@@ -9,7 +9,7 @@ required_config_var = []
 def main(bands, maxn, config):
     if config.get('parallel'): 
         #if running in parallel, start a dask client
-        n_workers = config.get("n_workers", 2)
+        n_workers = config.get("n_workers", 1)
         print(f"Starting Dask with {n_workers} workers...")
         cluster = LocalCluster(n_workers=n_workers, threads_per_worker=1)
         client = Client(cluster)

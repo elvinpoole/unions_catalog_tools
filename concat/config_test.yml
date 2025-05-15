@@ -4,7 +4,7 @@
 phot_base_path: "/arc/projects/unions/catalogues/unions/GAaP_photometry/UNIONS5000/"
 phot_input_file: "{tile}_SP_{bands}_photoz_ext.cat"
 shear_input_file: "unions_shapepipe_cut_struc_2024_v1.5.4.fits"
-run_label: "TEST"
+run_label: "TESTP"
 phot_output_label: "UNIONS5000"
 shear_output_label: "SP_v1.5.4"
 selection_label: flags_and_mags
@@ -14,4 +14,6 @@ do_main_file: True
 do_txpipe_files: True
 test_mode: True
 parallel: True
-n_workers: 4
+use_batches: True
+batch_size: 10000
+n_workers: 8
