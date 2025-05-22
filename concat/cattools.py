@@ -188,7 +188,7 @@ class ConCat:
         for band in band_list:
             for c in cols_band:
                 cols += [c.format(band=band)]
-            for ap in ["", "_0p7", "_1p0"]:  # Which GAaP apertures to include
+            for ap in ap_list:  # Which GAaP apertures to include
                 for c in cols_ap_band:
                     cols += [c.format(ap=ap, band=band)]
         
