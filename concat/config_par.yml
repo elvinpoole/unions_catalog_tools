@@ -1,0 +1,20 @@
+# config for UNIONS catalogs
+# contains file paths
+
+phot_base_path: "/arc/projects/unions/catalogues/unions/GAaP_photometry/UNIONS5000/"
+phot_input_file: "{tile}_SP_{bands}_photoz_ext.cat"
+shear_input_file: "unions_shapepipe_cut_struc_2024_v1.5.4.fits"
+run_label: "CATALOGP"
+phot_output_label: "UNIONS5000"
+shear_output_label: "SP_v1.5.4"
+selection_label: flags_and_mags
+do_phot_file: True
+do_shear_file: False
+do_main_file: True
+do_txpipe_files: False
+test_mode: False
+parallel: True
+use_batches: True
+batch_size: 1000 #in tiles
+n_workers: 16
+input_shear_file: "CATALOGP_SHEAR_SP_v1.5.4_2025-05-14.h5"
