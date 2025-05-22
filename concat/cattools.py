@@ -49,7 +49,7 @@ class ConCat:
             maxn (int or str): Maximum number of objects expected across all photometry catalogs, or 'auto' to figure it out automatically.
             config (dict): Configuration loaded from a YAML file
         """
-        self.bands = "ugriz"
+        self.bands = bands
         self.maxn = maxn
         
         self.config = config
@@ -160,6 +160,9 @@ class ConCat:
         """
         Constructs the list of columns to extract from each tile catalog
 
+        The columns to be saved are currently hardcoded and depend on 
+        the selection and bands requested.
+        
         Returns:
             cols (list): List of column names to extract from the photometry catalogs.
             sp_cols (list): List of column names to extract from the ShapePipe catalog
@@ -172,6 +175,13 @@ class ConCat:
             band_list = ["u", "g", "r", "i", "z", "z2"]
         elif self.bands == "ugri":
             band_list = ["u", "g", "r", "i"]
+
+        if self.selection == "all":
+            ap_list = [""] #when we select "all" objects i dont want to save the other apature cos it makes teh file too big
+            cols_ap_band.append("FLAG_GAAP{ap}_{band}") #but i do want to save the flags if we are saving everything
+            cols_band = [] # I also dont need the maglims for teh all selection
+        else:
+            ap_list = ["", "_0p7", "_1p0"]
 
         cols = []
         cols += cols_basic
@@ -192,7 +202,7 @@ class ConCat:
 
     def auto_compute_maxn(self, verbose=False):
         """
-        compute the total number of objects in all of the photometry files
+        Compute the total number of objects in all of the photometry files
 
         We do this by loading the catalog file from each tile and getting just the nrows value
         
@@ -283,6 +293,9 @@ class ConCat:
                     continue
             
                 with fio.FITS(filepath) as f:
+                    if i == 0:
+                        print('Columns found in first phot fits file')
+                        print(f[1]._colnames)
                     mask = self.get_mask(f[1], self.selection)
                     nrows1 = np.sum(mask.astype('int'))
                     self.nrows_masked.append(nrows1)
@@ -485,19 +498,18 @@ class ConCat:
             dec2 = output['shear/Dec'][:]
 
             #match sky coordinates using astropy
-            max_sep_arcsec = 10. #TODO: make this an input
-            c = SkyCoord(ra=ra1*u.degree, dec=dec1*u.degree)
-            catalog = SkyCoord(ra=ra2*u.degree, dec=dec2*u.degree)
-            idx, d2d, d3d = c.match_to_catalog_sky(catalog)
-            select_matches = (d2d.value*60*60 < max_sep_arcsec)
-        
-            index_phot  = np.arange(len(ra1))[select_matches]
-            index_shear = idx[select_matches]
+            phot_coords = SkyCoord(ra=ra1*u.degree, dec=dec1*u.degree)
+            shear_coords = SkyCoord(ra=ra2*u.degree, dec=dec2*u.degree)
+            #match photometry catalog to shear
+            idx_p2s, d2d_p2s, d3d_p2s = phot_coords.match_to_catalog_sky(shear_coords)
+            #match shear catalog to photometry
+            idx_s2p, d2d_s2p, d3d_s2p = shear_coords.match_to_catalog_sky(phot_coords)
 
             grp = output.create_group("index")
-            grp.create_dataset("index_phot", data=index_phot )
-            grp.create_dataset("index_shear", data=index_shear )
-            grp.create_dataset("d2d", data=d2d[select_matches])
+            grp.create_dataset("index_phot_to_shear", data=idx_p2s )
+            grp.create_dataset("index_shear_to_phot", data=idx_s2p )
+            grp.create_dataset("d2d_p2s", data=d2d_p2s.value )
+            grp.create_dataset("d2d_s2p", data=d2d_s2p.value )
 
     def get_mask(self, fits_table, selection):
         """

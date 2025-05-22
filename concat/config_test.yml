@@ -13,7 +13,7 @@ do_shear_file: True
 do_main_file: True
 do_txpipe_files: True
 test_mode: True
-parallel: True
+parallel: False
 use_batches: True
 batch_size: 10000
 n_workers: 8
