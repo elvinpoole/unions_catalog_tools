@@ -25,9 +25,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from catalog_pipeline import (
-    CutCounter, Histogram,
+    CutCounter, Histogram, HealpixStats,
     chunk_runner, summarize,
 )
+import healpy as hp
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -53,6 +54,17 @@ cut_defs = [
     #("T_ratio <= 3.0",           lambda x: x["NGMIX_T_1M"] / x["NGMIX_Tpsf_1M"] <= 3.0),
     ("Z_B >= 0.0",               lambda x: x["Z_B"] >= 0.0),
     ("Z_B <= 3.0",               lambda x: x["Z_B"] <= 3.0),
+]
+
+# ---------------------------------------------------------------------------
+# quantities I want maps for
+# ---------------------------------------------------------------------------
+
+HEALPIX_FIELDS = [
+    "mag",
+    "snr",
+    "FLUX_RADIUS",
+    "Z_B",
 ]
 
 # ---------------------------------------------------------------------------
@@ -195,7 +207,20 @@ for _, _, fields in HISTOGRAM_GROUPS:
     for (field, bins, rng, log) in fields:
         hist_map[field] = Histogram(field, bins=bins, range=rng, log=log, masked=True )
 
-processors = [cut_counter] + list(hist_map.values())
+hp_stats_masked = HealpixStats(
+    nside=128,
+    fields=HEALPIX_FIELDS,
+    masked=True,
+    tag="_withcuts"
+)
+hp_stats_nocuts = HealpixStats(
+    nside=128, 
+    fields=HEALPIX_FIELDS,
+    masked=False,
+    tag="_nocuts"
+)
+
+processors = [cut_counter] + list(hist_map.values()) + [hp_stats_masked, hp_stats_nocuts]
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +234,7 @@ chunk_runner(
     processors = processors,
     chunk_size = 1_000_000,
     nchunks    = None,       # set e.g. nchunks=5 for a quick test, None for full run
-    resume     = True,
+    resume     = False,
 )
 
 summarize(CACHE_PATH, processors)
@@ -218,7 +243,7 @@ cut_counter.print_summary()
 
 
 # ---------------------------------------------------------------------------
-# Plot — one figure per group
+# Plot — histograms: one figure per group
 # ---------------------------------------------------------------------------
 
 def plot_group(title, stem, fields):
@@ -231,7 +256,7 @@ def plot_group(title, stem, fields):
     axes = [axes] if n == 1 else list(axes.flat)
 
     for ax, (field, *_) in zip(axes, fields):
-        hist_map[field].plot(ax=ax, log_y=True, color="steelblue", edgecolor="none")
+        hist_map[field].plot(ax=ax, log_y=False, color="steelblue", edgecolor="none")
 
     # hide any unused subplots
     for ax in axes[n:]:
@@ -247,5 +272,101 @@ histograms_computed = np.array([isinstance(p,Histogram) for p in processors]).an
 if histograms_computed:
     for (title, stem, fields) in HISTOGRAM_GROUPS:
         plot_group(title, stem, fields)
+
+# ---------------------------------------------------------------------------
+# Plot — healpix maps
+# ---------------------------------------------------------------------------
+
+def plot_healpix_means(
+    hp_stats,
+    fields,
+    prefix="hp_mean",
+    ra_range=None,   # (ra_min, ra_max) in degrees
+    dec_range=None,  # (dec_min, dec_max) in degrees
+    rotate=False,
+):
+    for field in fields:
+        m = hp_stats.get_mean_map(field)
+
+        plt.figure(figsize=(8, 5))
+
+        vmin = np.nanpercentile(m, 1)
+        vmax = np.nanpercentile(m, 99)
+
+        if rotate:
+            rot=[-180, 0]
+        else:
+            rot=None
+
+        if ra_range is not None and dec_range is not None:
+            if rotate:
+                lonra = [ra_range[0]-180, ra_range[1]-180]
+            else:
+                lonra = [ra_range[0], ra_range[1]]
+            latra = [dec_range[0], dec_range[1]]
+
+            hp.cartview(
+                m,
+                lonra=lonra,
+                latra=latra,
+                rot=rot,
+                title=f"Mean {field}",
+                unit=field,
+                cmap="viridis",
+                min=vmin,
+                max=vmax,
+            )
+        else:
+            hp.mollview(
+                m,
+                title=f"Mean {field}",
+                rot=rot,
+                unit=field,
+                cmap="viridis",
+                min=vmin,
+                max=vmax,
+            )
+
+        outfile = f"{prefix}_{field}.png"
+        plt.savefig(outfile, dpi=150)
+        plt.close()
+        print(f"[plot] saved {outfile}")
+
+ra_range = [90,300]
+dec_range = [20,90]
+plot_healpix_means(
+    hp_stats_masked, 
+    HEALPIX_FIELDS, 
+    prefix="hp_mean_withcuts_zoom", 
+    ra_range=ra_range, 
+    dec_range=dec_range, 
+    rotate=True,
+)
+plot_healpix_means(
+    hp_stats_nocuts, 
+    HEALPIX_FIELDS, 
+    prefix="hp_mean_nocuts_zoom", 
+    ra_range=ra_range, 
+    dec_range=dec_range, 
+    rotate=True,
+)
+ra_range = None
+dec_range = None
+plot_healpix_means(
+    hp_stats_masked, 
+    HEALPIX_FIELDS, 
+    prefix="hp_mean_withcuts", 
+    ra_range=ra_range, 
+    dec_range=dec_range, 
+    rotate=True,
+)
+plot_healpix_means(
+    hp_stats_nocuts, 
+    HEALPIX_FIELDS, 
+    prefix="hp_mean_nocuts", 
+    ra_range=ra_range, 
+    dec_range=dec_range, 
+    rotate=True,
+)
 
 print("\nAll done.")

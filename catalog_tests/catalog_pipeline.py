@@ -18,7 +18,7 @@ import numpy as np
 import h5py
 from abc import ABC, abstractmethod
 from pathlib import Path
-
+import healpy as hp
 
 # ---------------------------------------------------------------------------
 # Base processor
@@ -195,6 +195,116 @@ class Histogram(BaseProcessor):
         if log_y:
             ax.set_yscale("log")
         return ax
+
+# ---------------------------------------------------------------------------
+# Concrete processor: Healpix statistics
+# ---------------------------------------------------------------------------
+
+class HealpixStats(BaseProcessor):
+    """
+    Accumulates per-healpix statistics:
+        - counts per pixel
+        - sum of selected fields per pixel
+
+    Parameters
+    ----------
+    nside  : int
+        Healpix nside
+    fields : list[str]
+        Columns to accumulate sums for
+    masked : bool
+        If True, only use rows passing mask
+    lonlat : bool
+        If True, assumes RA/Dec in degrees
+    """
+
+    def __init__(self, nside: int, fields: list[str],
+                 masked: bool = True, lonlat: bool = True,
+                tag: str = ""):
+        self.nside  = nside
+        self.fields = fields
+        self.masked = masked
+        self.lonlat = lonlat
+        self.tag = tag
+        
+        self.npix = hp.nside2npix(nside)
+        self.summary_ = None
+
+    @property
+    def name(self) -> str:
+        return f"HealpixStats_nside{self.nside}{self.tag}"
+
+    def process(self, x: np.ndarray, mask: np.ndarray) -> dict:
+        if self.masked:
+            x = x[mask]
+    
+        if len(x) == 0:
+            return {
+                "pix": np.array([], dtype=np.int64),
+                "count": np.array([], dtype=np.int64),
+                **{f"sum_{f}": np.array([], dtype=np.float64)
+                   for f in self.fields}
+            }
+    
+        ra  = x["RA"]
+        dec = x["Dec"]
+    
+        pix = hp.ang2pix(self.nside, ra, dec, lonlat=self.lonlat)
+    
+        # compress to unique pixels
+        unique_pix, inv = np.unique(pix, return_inverse=True)
+    
+        count = np.bincount(inv).astype(np.int64)
+    
+        result = {
+            "pix": unique_pix,
+            "count": count,
+        }
+    
+        for f in self.fields:
+            vals = x[f].astype(np.float64)
+            sums = np.bincount(inv, weights=vals)
+            result[f"sum_{f}"] = sums
+    
+        return result
+
+    def reduce(self, chunk_results: list[dict]):
+        # We only make the full healpix array here
+        # We have 1 full healpix array per field
+        total_count = np.zeros(self.npix, dtype=np.int64)
+        total_sums  = {
+            f: np.zeros(self.npix, dtype=np.float64)
+            for f in self.fields
+        }
+    
+        for r in chunk_results:
+            pix   = r["pix"]
+            count = r["count"]
+    
+            total_count[pix] += count
+    
+            for f in self.fields:
+                total_sums[f][pix] += r[f"sum_{f}"]
+    
+        self.summary_ = {
+            "count": total_count,
+            "sums": total_sums,
+        }
+        return self.summary_
+
+    def get_mean_map(self, field: str):
+        if self.summary_ is None:
+            raise RuntimeError("Call reduce() first.")
+
+        count = self.summary_["count"]
+        sums  = self.summary_["sums"][field]
+
+        mean = np.zeros_like(sums, dtype=np.float64)
+        mask = count > 0
+        mean[mask] = sums[mask] / count[mask]
+        mean[~mask] = np.nan
+
+        return mean
 
 
 # ---------------------------------------------------------------------------
