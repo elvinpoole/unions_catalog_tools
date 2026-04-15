@@ -20,6 +20,7 @@ Histogram groups (each saved to a separate figure):
     11. GAaP magnitudes               MAG_GAAP_0p7_*
 """
 
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -48,8 +49,10 @@ cut_defs = [
     ("mag < 30",                 lambda x: x["mag"] < 30),
     ("snr > 10",                 lambda x: x["snr"] > 10),
     ("snr < 500",                lambda x: x["snr"] < 500),
-    ("T_ratio >= 0.707",         lambda x: x["NGMIX_T_1M"] / x["NGMIX_Tpsf_1M"] >= 0.707),
-    ("T_ratio <= 3.0",           lambda x: x["NGMIX_T_1M"] / x["NGMIX_Tpsf_1M"] <= 3.0),
+    #("T_ratio >= 0.707",         lambda x: x["NGMIX_T_1M"] / x["NGMIX_Tpsf_1M"] >= 0.707),
+    #("T_ratio <= 3.0",           lambda x: x["NGMIX_T_1M"] / x["NGMIX_Tpsf_1M"] <= 3.0),
+    ("Z_B >= 0.0",               lambda x: x["Z_B"] >= 0.0),
+    ("Z_B <= 3.0",               lambda x: x["Z_B"] <= 3.0),
 ]
 
 # ---------------------------------------------------------------------------
@@ -206,7 +209,7 @@ chunk_runner(
     processors = processors,
     chunk_size = 1_000_000,
     nchunks    = None,       # set e.g. nchunks=5 for a quick test, None for full run
-    resume     = False,
+    resume     = True,
 )
 
 summarize(CACHE_PATH, processors)
@@ -240,8 +243,9 @@ def plot_group(title, stem, fields):
     plt.close(fig)
     print(f"[plot] saved {outfile}")
 
-
-for (title, stem, fields) in HISTOGRAM_GROUPS:
-    plot_group(title, stem, fields)
+histograms_computed = np.array([isinstance(p,Histogram) for p in processors]).any()
+if histograms_computed:
+    for (title, stem, fields) in HISTOGRAM_GROUPS:
+        plot_group(title, stem, fields)
 
 print("\nAll done.")

@@ -262,28 +262,21 @@ def chunk_runner(
     dataset_name: str  = "data",
     verbose:      bool = True,
 ):
-    """
-    Loop over the catalog in chunks, compute the cut mask once per chunk,
-    and run all processors.
-
-    Parameters
-    ----------
-    cat_path     : path to the source HDF5 catalog
-    cache_path   : path to the cache HDF5 (created if absent)
-    cut_defs     : list of (name, func) cut definitions
-    processors   : list of BaseProcessor instances
-    chunk_size   : rows per chunk
-    nchunks      : stop after this many chunks (None = all)
-    resume       : if True, skip chunks already in the cache
-    dataset_name : HDF5 dataset name inside cat_path
-    verbose      : print progress
-    """
     cache_path = Path(cache_path)
 
     if not resume and cache_path.exists():
         cache_path.unlink()
         if verbose:
             print(f"[runner] resume=False — deleted existing cache {cache_path}")
+    elif not resume and not cache_path.exists():
+        if verbose:
+            print(f"[runner] running from scratch (resume=False)")
+    elif resume and cache_path.exists():
+        if verbose:
+            print(f"[runner] running with resume=True using cache from {cache_path}")
+    elif resume and not cache_path.exists():
+        if verbose:
+            print(f"[runner] resume=True but no cache file was found")
 
     with h5py.File(cat_path, "r") as cat, \
          h5py.File(cache_path, "a") as cache:
@@ -291,41 +284,51 @@ def chunk_runner(
         dset = cat[dataset_name]
         N    = dset.shape[0]
 
-        already_done = _completed_chunks(cache)
-        if verbose and already_done:
-            print(f"[runner] Resuming — {len(already_done)} chunks already complete.")
-
         ichunk = 0
         for start in range(0, N, chunk_size):
             if nchunks is not None and ichunk >= nchunks:
                 break
 
-            if ichunk in already_done:
+            end = min(start + chunk_size, N)
+            key = _chunk_key(ichunk)
+
+            procs_needed = [
+                p for p in processors
+                if f"{p.name}/{key}" not in cache
+            ]
+
+            if not procs_needed:
                 if verbose:
-                    print(f"[runner] Chunk {ichunk:6d} — skipping (cached)")
+                    print(f"[runner] Chunk {ichunk:6d} — skipping (all processors cached)")
                 ichunk += 1
                 continue
 
-            end = min(start + chunk_size, N)
-            x   = dset[start:end]
+            x = dset[start:end]
 
-            # combined cut mask — computed once, shared across all processors
-            cut_masks = [func(x) for _, func in cut_defs]
-            mask      = np.logical_and.reduce(cut_masks)
+            if f"mask/{key}" in cache:
+                mask = cache[f"mask/{key}"][()]
+            else:
+                cut_masks = [func(x) for _, func in cut_defs]
+                mask      = np.logical_and.reduce(cut_masks)
+                _save_mask_chunk(cache, ichunk, mask)
 
-            _save_mask_chunk(cache, ichunk, mask)
-
-            for proc in processors:
+            for proc in procs_needed:
                 result = proc.process(x, mask)
                 _save_chunk_result(cache, proc.name, ichunk, result)
 
-            _mark_chunk_complete(cache, ichunk)
+            all_done = all(
+                f"{p.name}/{key}" in cache
+                for p in processors
+            )
+            if all_done:
+                _mark_chunk_complete(cache, ichunk)
 
             if verbose:
                 n_pass = np.count_nonzero(mask)
                 print(f"[runner] Chunk {ichunk:6d}  rows {start}:{end}  "
                       f"pass={n_pass}/{end-start} "
-                      f"({100*n_pass/(end-start):.2f}%)")
+                      f"({100*n_pass/(end-start):.2f}%)  "
+                      f"ran {len(procs_needed)}/{len(processors)} processor(s)")
 
             ichunk += 1
 
