@@ -196,6 +196,28 @@ class Histogram(BaseProcessor):
             ax.set_yscale("log")
         return ax
 
+    def save(self, out_path: str):
+        """
+        Save bin edges, centers, and counts to an HDF5 file.
+
+        Parameters
+        ----------
+        out_path : path to output HDF5 file (overwritten if exists)
+        """
+        if self.summary_ is None:
+            raise RuntimeError("Call reduce() first.")
+        counts  = self.summary_["counts"]
+        edges   = self.summary_["edges"]
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        with h5py.File(out_path, "w") as f:
+            f.create_dataset("edges",   data=edges)
+            f.create_dataset("centers", data=centers)
+            f.create_dataset("counts",  data=counts)
+            f.attrs["field"]  = self.field
+            f.attrs["log"]    = self.log
+            f.attrs["masked"] = self.masked
+
+
 # ---------------------------------------------------------------------------
 # Concrete processor: Healpix statistics
 # ---------------------------------------------------------------------------
@@ -302,9 +324,64 @@ class HealpixStats(BaseProcessor):
         mean = np.zeros_like(sums, dtype=np.float64)
         mask = count > 0
         mean[mask] = sums[mask] / count[mask]
-        mean[~mask] = np.nan
+        mean[~mask] = hp.UNSEEN
 
         return mean
+
+    def get_counts_map(self) -> np.ndarray:
+        """
+        Return the counts map as a full healpix array (length npix).
+        Empty pixels are set to nan.
+        """
+        if self.summary_ is None:
+            raise RuntimeError("Call reduce() first.")
+        m = self.summary_["count"].astype(np.float64)
+        m[m == 0] = hp.UNSEEN
+        return m
+
+    @property
+    def area_deg2(self) -> float:
+        """
+        Footprint area in square degrees: pixels with count >= 1 * pixel area.
+        """
+        if self.summary_ is None:
+            raise RuntimeError("Call reduce() first.")
+        n_occupied  = np.count_nonzero(self.summary_["count"] >= 1)
+        pix_area    = hp.nside2pixarea(self.nside, degrees=True)
+        return n_occupied * pix_area
+
+    def save(self, out_path: str):
+        """
+        Save the counts map and all mean maps to an HDF5 file.
+
+        Datasets written
+        ----------------
+        counts/pix    : int64  pixel indices with count >= 1
+        counts/values : int64  count values at those pixels
+        means/<field>/pix    : int64  pixel indices with count >= 1
+        means/<field>/values : float64 mean values at those pixels
+        Attributes: nside, tag, area_deg2
+        """
+        if self.summary_ is None:
+            raise RuntimeError("Call reduce() first.")
+
+        occupied = self.summary_["count"] >= 1
+        pix      = np.where(occupied)[0].astype(np.int64)
+
+        with h5py.File(out_path, "w") as f:
+            f.attrs["nside"]    = self.nside
+            f.attrs["tag"]      = self.tag
+            f.attrs["area_deg2"] = self.area_deg2
+
+            grp = f.create_group("counts")
+            grp.create_dataset("pix",    data=pix)
+            grp.create_dataset("values", data=self.summary_["count"][pix])
+
+            for field in self.fields:
+                mean = self.get_mean_map(field)
+                mgrp = f.require_group(f"means/{field}")
+                mgrp.create_dataset("pix",    data=pix)
+                mgrp.create_dataset("values", data=mean[pix])
 
 
 # ---------------------------------------------------------------------------
@@ -453,10 +530,19 @@ def chunk_runner(
 def summarize(
     cache_path: str,
     processors: list[BaseProcessor],
+    output_dir: str  = None,
     verbose:    bool = True,
 ):
     """
     Load all cached chunk results and call reduce() on each processor.
+
+    Parameters
+    ----------
+    cache_path : HDF5 cache produced by chunk_runner
+    processors : list of processors to reduce
+    output_dir : if given, call save() on processors that support it and
+                 write <output_dir>/<processor.name>.h5 for each
+    verbose    : print progress
     """
     with h5py.File(cache_path, "r") as cache:
         completed = sorted(_completed_chunks(cache))
@@ -470,6 +556,17 @@ def summarize(
             proc.reduce(chunk_results)
             if verbose:
                 print(f"[summarize] {proc.name} reduced over {len(completed)} chunks.")
+
+    if output_dir is not None:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for proc in processors:
+            if not hasattr(proc, "save"):
+                continue
+            out_path = out_dir / f"{proc.name}.h5"
+            proc.save(str(out_path))
+            if verbose:
+                print(f"[summarize] {proc.name} saved to {out_path}")
 
 
 # ---------------------------------------------------------------------------

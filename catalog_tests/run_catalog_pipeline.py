@@ -234,10 +234,10 @@ chunk_runner(
     processors = processors,
     chunk_size = 1_000_000,
     nchunks    = None,       # set e.g. nchunks=5 for a quick test, None for full run
-    resume     = False,
+    resume     = True,
 )
 
-summarize(CACHE_PATH, processors)
+summarize(CACHE_PATH, processors, output_dir="./")
 
 cut_counter.print_summary()
 
@@ -285,8 +285,12 @@ def plot_healpix_means(
     dec_range=None,  # (dec_min, dec_max) in degrees
     rotate=False,
 ):
+    fields = ["counts"] + fields
     for field in fields:
-        m = hp_stats.get_mean_map(field)
+        if field == "counts":
+            m = hp_stats.get_counts_map()
+        else:
+            m = hp_stats.get_mean_map(field)
 
         plt.figure(figsize=(8, 5))
 
