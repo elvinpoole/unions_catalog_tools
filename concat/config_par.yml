@@ -8,7 +8,7 @@ run_label: "CATALOGP"
 phot_output_label: "UNIONS5000"
 shear_output_label: "SP_v1.5.4"
 selection_label: flags_and_mags
-do_phot_file: True
+do_phot_file: False
 do_shear_file: False
 do_main_file: True
 do_txpipe_files: False
@@ -17,4 +17,5 @@ parallel: True
 use_batches: True
 batch_size: 1000 #in tiles
 n_workers: 16
-input_shear_file: "CATALOGP_SHEAR_SP_v1.5.4_2025-05-14.h5"
+input_phot_file: "/arc/projects/unions/lensing/matched_catalogs/CATALOGP_MAIN_SP_v1.5.4_UNIONS5000_2025-07-24_SP_ugriz_photoz_ext.cat.h5"
+input_shear_file: "/arc/projects/unions/lensing/matched_catalogs/CATALOGP_SHEAR_SP_v1.5.4_2025-05-14.h5"
