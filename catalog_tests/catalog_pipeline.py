@@ -19,6 +19,7 @@ import h5py
 from abc import ABC, abstractmethod
 from pathlib import Path
 import healpy as hp
+from mpi4py import MPI
 
 # ---------------------------------------------------------------------------
 # Base processor
@@ -136,6 +137,8 @@ class CutCounter(BaseProcessor):
 
 class Histogram(BaseProcessor):
     """
+    Single-field histogram processor 
+    
     Accumulates a histogram of one field for objects that pass all cuts.
 
     Parameters
@@ -218,6 +221,117 @@ class Histogram(BaseProcessor):
             f.attrs["masked"] = self.masked
 
 
+class HistogramGroup(BaseProcessor):
+    """
+    Multi-field histogram processor
+
+    Parameters
+    ----------
+    fields : list[str]
+        Column names
+    bins : int (default for all fields)
+    ranges : dict[str, (min, max)] or None
+    logs : dict[str, bool] or None
+    masked : bool
+    """
+
+    def __init__(
+        self,
+        fields: list[str],
+        bins: dict[str, int],
+        ranges: dict[str, tuple] | None = None,
+        logs: dict[str, bool] | None = None,
+        masked: bool = True,
+        tag: str = "",
+    ):
+        self.fields = fields
+        self.bins = bins
+        self.ranges = ranges or {}
+        self.logs = logs or {}
+        self.masked = masked
+        self.tag = tag
+
+        self.summary_ = None
+
+    @property
+    def name(self) -> str:
+        return f"HistogramGroup{self.tag}"
+
+    def process(self, x: np.ndarray, mask: np.ndarray) -> dict:
+        if self.masked:
+            x = x[mask]
+
+        if len(x) == 0:
+            return {
+                f"{f}_counts": np.zeros(self.bins[f], dtype=np.int64)
+                for f in self.fields
+            } | {
+                f"{f}_edges": np.linspace(0, 1, self.bins[f] + 1)
+                for f in self.fields
+            }
+
+        result = {}
+
+        for f in self.fields:
+            values = x[f].astype(np.float64)
+
+            if self.logs.get(f, False):
+                values = values[values > 0]
+                values = np.log10(values)
+
+            counts, edges = np.histogram(
+                values,
+                bins=self.bins[f],
+                range=self.ranges.get(f, None),
+            )
+
+            result[f"{f}_counts"] = counts.astype(np.int64)
+            result[f"{f}_edges"]  = edges.astype(np.float64)
+
+        return result
+
+    def reduce(self, chunk_results: list[dict]):
+        summary = {}
+
+        for f in self.fields:
+            total_counts = sum(r[f"{f}_counts"] for r in chunk_results)
+            edges = chunk_results[0][f"{f}_edges"]
+
+            summary[f] = {
+                "counts": total_counts,
+                "edges": edges,
+            }
+
+        self.summary_ = summary
+        return summary
+
+    def plot(self, field: str, ax=None, log_y=False, **kwargs):
+        import matplotlib.pyplot as plt
+
+        if self.summary_ is None:
+            raise RuntimeError("Call reduce() first.")
+
+        data = self.summary_[field]
+        counts = data["counts"]
+        edges  = data["edges"]
+        centers = 0.5 * (edges[:-1] + edges[1:])
+
+        if ax is None:
+            _, ax = plt.subplots()
+
+        ax.bar(centers, counts, width=np.diff(edges), **kwargs)
+
+        xlabel = f"log10({field})" if self.logs.get(field, False) else field
+
+        ax.set_xlabel(xlabel, fontsize=8)
+        ax.set_ylabel("count", fontsize=8)
+        ax.set_title(field, fontsize=9)
+
+        if log_y:
+            ax.set_yscale("log")
+
+        return ax
+    
 # ---------------------------------------------------------------------------
 # Concrete processor: Healpix statistics
 # ---------------------------------------------------------------------------
@@ -438,7 +552,7 @@ def _mark_chunk_complete(cache_file: h5py.File, ichunk: int):
 # chunk_runner
 # ---------------------------------------------------------------------------
 
-def chunk_runner(
+def chunk_runner_serial(
     cat_path:     str,
     cache_path:   str,
     cut_defs:     list,
@@ -522,12 +636,83 @@ def chunk_runner(
     if verbose:
         print(f"[runner] Done. Cache written to {cache_path}")
 
+def chunk_runner_mpi(
+    cat_path:     str,
+    cache_path:   str,
+    cut_defs:     list,
+    processors:   list[BaseProcessor],
+    chunk_size:   int  = 1_000_000,
+    nchunks:      int  = None,
+    resume:       bool = True,
+    dataset_name: str  = "data",
+    verbose:      bool = True,
+):
+
+    assert not resume, "dont use resume with the MPI version"
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    cache_path = Path(cache_path)
+    cache_path_rank = cache_path.with_name(
+        f"{cache_path.stem}_rank{rank}.hdf5"
+    )
+
+    if rank == 0 and verbose:
+        print(f"[mpi] Running with {size} ranks")
+
+    with h5py.File(cat_path, "r", swmr=True) as cat, \
+         h5py.File(cache_path_rank, "a") as cache:
+
+        dset = cat[dataset_name]
+        N    = dset.shape[0]
+
+        ichunk = 0
+        for start in range(0, N, chunk_size):
+
+            if nchunks is not None and ichunk >= nchunks:
+                break
+
+            # distribute chunks across ranks
+            if ichunk % size != rank:
+                ichunk += 1
+                continue
+
+            end = min(start + chunk_size, N)
+            key = _chunk_key(ichunk)
+
+            x = dset[start:end]
+
+            # compute mask
+            cut_masks = [func(x) for _, func in cut_defs]
+            mask      = np.logical_and.reduce(cut_masks)
+
+            _save_mask_chunk(cache, ichunk, mask)
+
+            # run processors
+            for proc in processors:
+                result = proc.process(x, mask)
+                _save_chunk_result(cache, proc.name, ichunk, result)
+
+            if verbose:
+                n_pass = np.count_nonzero(mask)
+                print(f"[rank {rank}] chunk {ichunk:6d} "
+                      f"{start}:{end} "
+                      f"pass={n_pass}/{end-start} "
+                      f"({100*n_pass/(end-start):.2f}%)")
+
+            ichunk += 1
+
+    comm.Barrier()
+
+    if rank == 0 and verbose:
+        print(f"[mpi] Done. Per-rank caches written like: {cache_path.stem}_rank*.hdf5")
 
 # ---------------------------------------------------------------------------
 # summarize
 # ---------------------------------------------------------------------------
 
-def summarize(
+def summarize_serial(
     cache_path: str,
     processors: list[BaseProcessor],
     output_dir: str  = None,
@@ -560,6 +745,80 @@ def summarize(
     if output_dir is not None:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+        for proc in processors:
+            if not hasattr(proc, "save"):
+                continue
+            out_path = out_dir / f"{proc.name}.h5"
+            proc.save(str(out_path))
+            if verbose:
+                print(f"[summarize] {proc.name} saved to {out_path}")
+
+def summarize_mpi(
+    cache_path: str,
+    processors: list[BaseProcessor],
+    output_dir: str  = None,
+    verbose:    bool = True,
+):
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    cache_path = Path(cache_path)
+
+    # each rank loads its own cache
+    cache_path_rank = cache_path.with_name(
+        f"{cache_path.stem}_rank{rank}.hdf5"
+    )
+
+    with h5py.File(cache_path_rank, "r") as cache:
+        #completed = sorted(_completed_chunks(cache))
+
+        local_results = {}
+        for proc in processors:
+            #chunk_results = [
+            #    _load_chunk_result(cache, proc.name, i) for i in completed
+            #]
+            
+            #####
+            if proc.name not in cache:
+                local_results[proc.name] = []
+                continue
+        
+            grp = cache[proc.name]
+        
+            chunk_keys = sorted(grp.keys())  # e.g. chunk_000000, chunk_000001, ...
+        
+            chunk_results = [
+                {k: grp[key][k][()] for k in grp[key]}
+                for key in chunk_keys
+            ]
+            #####
+            
+            local_results[proc.name] = chunk_results
+
+    # gather all results to rank 0
+    gathered = comm.gather(local_results, root=0)
+
+    if rank != 0:
+        return
+
+    # merge all chunk results
+    for proc in processors:
+        all_chunk_results = []
+
+        for rank_results in gathered:
+            all_chunk_results.extend(rank_results[proc.name])
+
+        proc.reduce(all_chunk_results)
+
+        if verbose:
+            print(f"[summarize] {proc.name} reduced over {len(all_chunk_results)} chunks.")
+
+    # save outputs
+    if output_dir is not None:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
         for proc in processors:
             if not hasattr(proc, "save"):
                 continue
