@@ -649,6 +649,7 @@ def chunk_runner_mpi(
 ):
 
     assert not resume, "dont use resume with the MPI version"
+            
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -657,6 +658,14 @@ def chunk_runner_mpi(
     cache_path_rank = cache_path.with_name(
         f"{cache_path.stem}_rank{rank}.hdf5"
     )
+
+    if cache_path_rank.exists():
+        cache_path_rank.unlink()
+        if verbose:
+            print(f"[runner] resume=False — deleted existing cache {cache_path_rank}")
+    else:
+        if verbose:
+            print(f"[runner] running from scratch (resume=False)")
 
     if rank == 0 and verbose:
         print(f"[mpi] Running with {size} ranks")
