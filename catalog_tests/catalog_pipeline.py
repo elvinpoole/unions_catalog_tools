@@ -245,7 +245,7 @@ class HistogramGroup(BaseProcessor):
         tag: str = "",
     ):
         self.fields = fields
-        self.bins = bins
+        self.bins = bins or {}
         self.ranges = ranges or {}
         self.logs = logs or {}
         self.masked = masked
@@ -266,7 +266,10 @@ class HistogramGroup(BaseProcessor):
                 f"{f}_counts": np.zeros(self.bins[f], dtype=np.int64)
                 for f in self.fields
             } | {
-                f"{f}_edges": np.linspace(0, 1, self.bins[f] + 1)
+                f"{f}_edges": np.linspace(
+                    self.ranges.get(f)[0],
+                    self.ranges.get(f)[1],
+                    self.bins[f] + 1)
                 for f in self.fields
             }
 
@@ -282,7 +285,7 @@ class HistogramGroup(BaseProcessor):
             counts, edges = np.histogram(
                 values,
                 bins=self.bins[f],
-                range=self.ranges.get(f, None),
+                range=self.ranges.get(f),
             )
 
             result[f"{f}_counts"] = counts.astype(np.int64)

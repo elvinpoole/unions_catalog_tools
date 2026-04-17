@@ -38,7 +38,7 @@ from mpi4py import MPI
 # ---------------------------------------------------------------------------
 
 CAT_PATH   = "/arc/projects/unions/lensing/ShapePipe/v1.6.x/unions_shapepipe_comprehensive_struc_ugriz_2024_v1.6.c.1.hdf5"
-output_dir = "output_mpi/"
+output_dir = "output_mpi_wTcut/"
 CACHE_PATH = output_dir+"pipeline_cache.hdf5"
 resume=False
 chunk_size = 1_000_000
@@ -58,8 +58,8 @@ cut_defs = [
     ("mag < 30",                 lambda x: x["mag"] < 30),
     ("snr > 10",                 lambda x: x["snr"] > 10),
     ("snr < 500",                lambda x: x["snr"] < 500),
-    #("T_ratio >= 0.707",         lambda x: x["NGMIX_T_1M"] / x["NGMIX_Tpsf_1M"] >= 0.707),
-    #("T_ratio <= 3.0",           lambda x: x["NGMIX_T_1M"] / x["NGMIX_Tpsf_1M"] <= 3.0),
+    ("T_ratio >= 0.707",         lambda x: x["NGMIX_T_NOSHEAR"] / x["NGMIX_Tpsf_NOSHEAR"] >= 0.707),
+    ("T_ratio <= 3.0",           lambda x: x["NGMIX_T_NOSHEAR"] / x["NGMIX_Tpsf_NOSHEAR"] <= 3.0),
     ("Z_B >= 0.0",               lambda x: x["Z_B"] >= 0.0),
     ("Z_B <= 3.0",               lambda x: x["Z_B"] <= 3.0),
 ]
@@ -128,8 +128,8 @@ HISTOGRAM_GROUPS = [
 
     ("Sky position & weight", "hist_position", [
         ("RA",   100, (0.0,   360.0), False),
-        ("Dec",  100, (-90.0,  30.0), False),
-        ("w_iv", 50,  None,           True ),   # weight: log scale
+        ("Dec",  100, (-20.0,  90.0), False),
+        ("w_iv", 50,  (0, 5),        False ),   
     ]),
 
     ("Photometry", "hist_photometry", [
@@ -141,10 +141,10 @@ HISTOGRAM_GROUPS = [
     ]),
 
     ("Flux (SExtractor)", "hist_flux_sex", [
-        ("FLUX_AUTO",     50, None, True),
-        ("FLUXERR_AUTO",  50, None, True),
-        ("FLUX_APER",     50, None, True),
-        ("FLUXERR_APER",  50, None, True),
+        ("FLUX_AUTO",     50, (0, np.log10(60000)), True),
+        ("FLUXERR_AUTO",  50, (0, np.log10(100)), True),
+        ("FLUX_APER",     50, (0, np.log10(6000)), True),
+        ("FLUXERR_APER",  50, (0, np.log10(30)), True),
     ]),
 
     ("Size & shape (SExtractor)", "hist_size_sex", [
@@ -173,7 +173,7 @@ HISTOGRAM_GROUPS = [
         ("NGMIX_FLAGS_1P",   10, (0,  10), False),
         ("NGMIX_FLAGS_2M",   10, (0,  10), False),
         ("NGMIX_FLAGS_2P",   10, (0,  10), False),
-        ("TILE_ID",          50, None,      False),
+        ("TILE_ID",          50, (0, 700),      False),
     ]),
 
     ("NGMIX ellipticities", "hist_ngmix_ell", [
@@ -194,16 +194,16 @@ HISTOGRAM_GROUPS = [
     ]),
 
     ("NGMIX flux", "hist_ngmix_flux", [
-        ("NGMIX_FLUX_NOSHEAR",    50, None, True),
-        ("NGMIX_FLUX_1M",         50, None, True),
-        ("NGMIX_FLUX_1P",         50, None, True),
-        ("NGMIX_FLUX_2M",         50, None, True),
-        ("NGMIX_FLUX_2P",         50, None, True),
-        ("NGMIX_FLUX_ERR_NOSHEAR",50, None, True),
-        ("NGMIX_FLUX_ERR_1M",     50, None, True),
-        ("NGMIX_FLUX_ERR_1P",     50, None, True),
-        ("NGMIX_FLUX_ERR_2M",     50, None, True),
-        ("NGMIX_FLUX_ERR_2P",     50, None, True),
+        ("NGMIX_FLUX_NOSHEAR",    50, (0, np.log10(30000)), True),
+        ("NGMIX_FLUX_1M",         50, (0, np.log10(30000)), True),
+        ("NGMIX_FLUX_1P",         50, (0, np.log10(30000)), True),
+        ("NGMIX_FLUX_2M",         50, (0, np.log10(30000)), True),
+        ("NGMIX_FLUX_2P",         50, (0, np.log10(30000)), True),
+        ("NGMIX_FLUX_ERR_NOSHEAR",50, (0, np.log10(1000)), True),
+        ("NGMIX_FLUX_ERR_1M",     50, (0, np.log10(1000)), True),
+        ("NGMIX_FLUX_ERR_1P",     50, (0, np.log10(1000)), True),
+        ("NGMIX_FLUX_ERR_2M",     50, (0, np.log10(1000)), True),
+        ("NGMIX_FLUX_ERR_2P",     50, (0, np.log10(1000)), True),
     ]),
 
     ("NGMIX size (T)", "hist_ngmix_T", [
@@ -273,7 +273,7 @@ hist_processor_masked = HistogramGroup(
     ranges=ranges,
     logs=logs,
     masked=True,
-    tag="_nocuts",
+    tag="_withcuts",
 )
 hist_processor_nocuts = HistogramGroup(
     fields=ALL_HIST_FIELDS,
@@ -281,7 +281,7 @@ hist_processor_nocuts = HistogramGroup(
     ranges=ranges,
     logs=logs,
     masked=False,
-    tag="_withcuts",
+    tag="_nocuts",
 )
 
 # build the healpix map processors
@@ -374,7 +374,8 @@ if rank == 0:
     
         for ax in axes[n:]:
             ax.set_visible(False)
-    
+
+        title += f" {hist_proc.tag}"
         fig.suptitle(title, fontsize=12, fontweight="bold")
         outfile = plot_dir + f"/{prefix}_{stem}.png"
         fig.savefig(outfile, dpi=150)
@@ -432,7 +433,7 @@ if rank == 0:
                     lonra=lonra,
                     latra=latra,
                     rot=rot,
-                    title=f"Mean {field}",
+                    title=f"Mean {field} {hp_stats.tag}",
                     unit=field,
                     cmap="viridis",
                     min=vmin,
@@ -441,7 +442,7 @@ if rank == 0:
             else:
                 hp.mollview(
                     m,
-                    title=f"Mean {field}",
+                    title=f"Mean {field} {hp_stats.tag}",
                     rot=rot,
                     unit=field,
                     cmap="viridis",
