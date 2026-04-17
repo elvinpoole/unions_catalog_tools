@@ -29,6 +29,7 @@ from catalog_pipeline import (
     chunk_runner_serial, summarize_serial,
     chunk_runner_mpi, summarize_mpi,
 )
+from slide_tools import make_slides
 import healpy as hp
 from pathlib import Path
 from mpi4py import MPI
@@ -38,7 +39,7 @@ from mpi4py import MPI
 # ---------------------------------------------------------------------------
 
 CAT_PATH   = "/arc/projects/unions/lensing/ShapePipe/v1.6.x/unions_shapepipe_comprehensive_struc_ugriz_2024_v1.6.c.1.hdf5"
-output_dir = "output_mpi_wTcut/"
+output_dir = "output_mpi_wTcut_ugri/"
 CACHE_PATH = output_dir+"pipeline_cache.hdf5"
 resume=False
 chunk_size = 1_000_000
@@ -62,6 +63,11 @@ cut_defs = [
     ("T_ratio <= 3.0",           lambda x: x["NGMIX_T_NOSHEAR"] / x["NGMIX_Tpsf_NOSHEAR"] <= 3.0),
     ("Z_B >= 0.0",               lambda x: x["Z_B"] >= 0.0),
     ("Z_B <= 3.0",               lambda x: x["Z_B"] <= 3.0),
+    ("MAG_GAAP_0p7_u != -99.",   lambda x: x["MAG_GAAP_0p7_u"] != -99.),
+    ("MAG_GAAP_0p7_g != -99.",   lambda x: x["MAG_GAAP_0p7_g"] != -99.),
+    ("MAG_GAAP_0p7_r != -99.",   lambda x: x["MAG_GAAP_0p7_r"] != -99.),
+    ("MAG_GAAP_0p7_i != -99.",   lambda x: x["MAG_GAAP_0p7_i"] != -99.),
+    #("MAG_GAAP_0p7_z(2) != -99.",lambda x: (x["MAG_GAAP_0p7_z"] != -99.)|(x["MAG_GAAP_0p7_z2"] != -99.) ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -119,8 +125,6 @@ HEALPIX_FIELDS = [
 # Grouped by physical meaning. Each entry:
 #   (field, bins, range, log)
 # log=True  → histogram of log10(|value|); good for quantities spanning decades
-# range=None → let numpy auto-range per chunk (safe only when log=True or
-#              the field is well-behaved; prefer explicit ranges where known)
 # ---------------------------------------------------------------------------
 
 # Each group is (group_title, filename_stem, [(field, bins, range, log), ...])
@@ -495,5 +499,8 @@ if rank == 0:
         rotate=True,
         plot_dir=output_dir, 
     )
+
+    make_slides(output_dir)
+
     
     print("\nAll done.")
