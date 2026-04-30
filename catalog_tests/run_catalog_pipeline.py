@@ -25,7 +25,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from catalog_pipeline import (
-    CutCounter, Histogram, HistogramGroup, HealpixStats,
+    CutCounter, Histogram, HistogramGroup, HealpixStats, CutCat,
     chunk_runner_serial, summarize_serial,
     chunk_runner_mpi, summarize_mpi,
 )
@@ -39,8 +39,9 @@ from mpi4py import MPI
 # ---------------------------------------------------------------------------
 
 CAT_PATH   = "/arc/projects/unions/lensing/ShapePipe/v1.6.x/unions_shapepipe_comprehensive_struc_ugriz_2024_v1.6.c.1.hdf5"
-output_dir = "output_mpi_wTcut_ugri/"
+output_dir = "output_mpi_wTcut_ugriz_cutcat/"
 CACHE_PATH = output_dir+"pipeline_cache.hdf5"
+cutcat_output_path = output_dir + "unions_shapepipe_cutcat_ugriz_2024_v1.6.c.1.hdf5"
 resume=False
 chunk_size = 1_000_000
 nchunks    = None       # set e.g. nchunks=5 for a quick test, None for full run
@@ -67,7 +68,7 @@ cut_defs = [
     ("MAG_GAAP_0p7_g != -99.",   lambda x: x["MAG_GAAP_0p7_g"] != -99.),
     ("MAG_GAAP_0p7_r != -99.",   lambda x: x["MAG_GAAP_0p7_r"] != -99.),
     ("MAG_GAAP_0p7_i != -99.",   lambda x: x["MAG_GAAP_0p7_i"] != -99.),
-    #("MAG_GAAP_0p7_z(2) != -99.",lambda x: (x["MAG_GAAP_0p7_z"] != -99.)|(x["MAG_GAAP_0p7_z2"] != -99.) ),
+    ("MAG_GAAP_0p7_z(2) != -99.",lambda x: (x["MAG_GAAP_0p7_z"] != -99.)|(x["MAG_GAAP_0p7_z2"] != -99.) ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -245,6 +246,33 @@ HISTOGRAM_GROUPS = [
     ]),
 ]
 
+# ---------------------------------------------------------------------------
+# cut catalog columns
+# ---------------------------------------------------------------------------
+
+
+cutcat_cols = [
+ 'RA',
+ 'Dec',
+ 'w_iv',
+ 'e1_uncal',
+ 'e2_uncal',
+ 'snr',
+ 'NGMIX_ELL_1M_0',
+ 'NGMIX_ELL_1M_1',
+ 'NGMIX_ELL_1P_0',
+ 'NGMIX_ELL_1P_1',
+ 'NGMIX_ELL_2M_0',
+ 'NGMIX_ELL_2M_1',
+ 'NGMIX_ELL_2P_0',
+ 'NGMIX_ELL_2P_1',
+ 'NGMIX_ELL_NOSHEAR_0',
+ 'NGMIX_ELL_NOSHEAR_1',
+ 'NGMIX_T_NOSHEAR',
+ 'NGMIX_Tpsf_NOSHEAR',
+ 'Z_B',
+]
+
 # ------------
 # make output directory
 # ------------
@@ -255,6 +283,8 @@ Path(output_dir).mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 
 cut_counter = CutCounter(cut_defs)
+
+cut_cat = CutCat(out_path=cutcat_output_path, save_columns=cutcat_cols,)
 
 # collect all unique histogram fields and build the hist processors
 ALL_HIST_FIELDS = []
@@ -303,7 +333,7 @@ hp_stats_nocuts = HealpixStats(
     tag="_nocuts"
 )
 
-processors = [cut_counter, hist_processor_masked, hist_processor_nocuts, hp_stats_masked, hp_stats_nocuts]
+processors = [cut_counter, cut_cat, hist_processor_masked, hist_processor_nocuts, hp_stats_masked, hp_stats_nocuts]
 
 # ---------------------------------------------------------------------------
 # select mpi or serial

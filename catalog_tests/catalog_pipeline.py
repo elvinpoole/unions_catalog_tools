@@ -500,6 +500,174 @@ class HealpixStats(BaseProcessor):
                 mgrp.create_dataset("pix",    data=pix)
                 mgrp.create_dataset("values", data=mean[pix])
 
+# ---------------------------------------------------------------------------
+# processor: Save cut catalog 
+# ---------------------------------------------------------------------------
+
+class CutCat(BaseProcessor):
+    """
+    Applies cuts, saves selected columns + R columns.
+
+    Behavior:
+      - Serial → writes single file
+      - MPI → writes per-rank files automatically
+      - reduce() merges if MPI
+    """
+
+    def __init__(
+        self,
+        out_path: str,
+        save_columns: list[str],
+        tag: str = "",
+        step: float = 0.01,
+        sign: float = 1.0,
+    ):
+        from mpi4py import MPI
+
+        comm = MPI.COMM_WORLD
+        self.rank = comm.Get_rank()
+        self.size = comm.Get_size()
+        self.use_mpi = self.size > 1
+
+        self.base_out_path = Path(out_path)
+
+        if self.use_mpi:
+            self.out_path = self.base_out_path.with_name(
+                f"{self.base_out_path.stem}_rank{self.rank}.hdf5"
+            )
+        else:
+            self.out_path = self.base_out_path
+
+        self.tag = tag
+
+        self.save_columns = save_columns
+        self.R_columns = ["R11", "R22", "R12", "R21"]
+        self.columns = self.save_columns + self.R_columns
+
+        self.h2 = 2 * step
+        self.sign = sign
+
+        self._initialized = False
+        self._write_index = 0
+
+    @property
+    def name(self) -> str:
+        return f"CutCat{self.tag}"
+
+    # ------------------------------------------------------------------
+    def _init_file(self, example_data: dict):
+        if self._initialized:
+            return
+
+        self._f = h5py.File(self.out_path, "w")
+
+        self._dsets = {}
+        for col, arr in example_data.items():
+            arr = np.asarray(arr)
+
+            self._dsets[col] = self._f.create_dataset(
+                col,
+                shape=(0,),
+                maxshape=(None,),
+                dtype=arr.dtype,
+                compression="gzip",
+                compression_opts=4,
+            )
+
+        self._initialized = True
+
+    # ------------------------------------------------------------------
+    def _compute_R(self, x: np.ndarray) -> dict:
+
+        g = lambda name: x[name].astype(np.float64)
+
+        p1_g1 = g("NGMIX_ELL_1P_0")
+        p1_g2 = g("NGMIX_ELL_1P_1")
+
+        m1_g1 = g("NGMIX_ELL_1M_0")
+        m1_g2 = g("NGMIX_ELL_1M_1")
+
+        p2_g1 = g("NGMIX_ELL_2P_0")
+        p2_g2 = g("NGMIX_ELL_2P_1")
+
+        m2_g1 = g("NGMIX_ELL_2M_0")
+        m2_g2 = g("NGMIX_ELL_2M_1")
+
+        h2 = self.h2
+        sign = self.sign
+
+        return {
+            "R11": (p1_g1 - m1_g1) / h2,
+            "R22": sign * (p2_g2 - m2_g2) / h2,
+            "R12": (p2_g1 - m2_g1) / h2,
+            "R21": (p1_g2 - m1_g2) / h2,
+        }
+
+    # ------------------------------------------------------------------
+    def process(self, x: np.ndarray, mask: np.ndarray) -> dict:
+
+        x = x[mask]
+
+        if len(x) == 0:
+            return {}
+
+        data = {col: x[col] for col in self.save_columns}
+        R = self._compute_R(x)
+        full_data = {**data, **R}
+
+        self._init_file(full_data)
+
+        n = len(next(iter(full_data.values())))
+
+        for col, arr in full_data.items():
+            ds = self._dsets[col]
+            ds.resize(self._write_index + n, axis=0)
+            ds[self._write_index:self._write_index + n] = arr
+
+        self._write_index += n
+
+        return {}
+
+    # ------------------------------------------------------------------
+    def reduce(self, chunk_results: list[dict]):
+        # Close this rank's file if open
+        if hasattr(self, "_f"):
+            self._f.close()
+    
+        if not self.use_mpi:
+            print(f"[reduce] serial output → {self.out_path}")
+            return
+    
+        # Only rank 0 reaches here (summarize_mpi guarantees this)
+        out_path = self.base_out_path
+        with h5py.File(out_path, "w") as fout:
+            dsets = {}
+            total_written = 0
+    
+            for r in range(self.size):
+                rank_path = self.base_out_path.with_name(
+                    f"{self.base_out_path.stem}_rank{r}.hdf5"
+                )
+                if not rank_path.exists():
+                    continue
+    
+                with h5py.File(rank_path, "r") as fin:
+                    n = len(fin[self.columns[0]])
+                    if not dsets:
+                        for col in self.columns:
+                            dsets[col] = fout.create_dataset(
+                                col, shape=(0,), maxshape=(None,),
+                                dtype=fin[col].dtype,
+                                compression="gzip", compression_opts=4,
+                            )
+                    for col in self.columns:
+                        ds_out = dsets[col]
+                        ds_in  = fin[col]
+                        ds_out.resize(total_written + n, axis=0)
+                        ds_out[total_written:total_written + n] = ds_in[:]
+                    total_written += n
+    
+        print(f"[reduce] merged {self.size} ranks → {out_path}")
 
 # ---------------------------------------------------------------------------
 # HDF5 cache helpers (private)
