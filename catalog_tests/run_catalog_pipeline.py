@@ -39,7 +39,7 @@ from mpi4py import MPI
 # ---------------------------------------------------------------------------
 
 CAT_PATH   = "/arc/projects/unions/lensing/ShapePipe/v1.6.x/unions_shapepipe_comprehensive_struc_ugriz_2024_v1.6.c.1.hdf5"
-output_dir = "output_mpi_wTcut_ugriz_cutcat/"
+output_dir = "output_mpi_ugriz_matchsp/"
 CACHE_PATH = output_dir+"pipeline_cache.hdf5"
 cutcat_output_path = output_dir + "unions_shapepipe_cutcat_ugriz_2024_v1.6.c.1.hdf5"
 resume=False
@@ -69,6 +69,12 @@ cut_defs = [
     ("MAG_GAAP_0p7_r != -99.",   lambda x: x["MAG_GAAP_0p7_r"] != -99.),
     ("MAG_GAAP_0p7_i != -99.",   lambda x: x["MAG_GAAP_0p7_i"] != -99.),
     ("MAG_GAAP_0p7_z(2) != -99.",lambda x: (x["MAG_GAAP_0p7_z"] != -99.)|(x["MAG_GAAP_0p7_z2"] != -99.) ),
+
+    ("overlap == True",          lambda x: x["overlap"] == True),    
+    ("NGMIX_MOM_FAIL == 0",      lambda x: x["NGMIX_MOM_FAIL"] == 0),
+    ("IMAFLAGS_ISO == 0",        lambda x: x["IMAFLAGS_ISO"] == 0),
+    ("NGMIX_ELL_PSFo_NOSHEAR_0 != -10",      lambda x: x["NGMIX_ELL_PSFo_NOSHEAR_0"] != -10),
+    ("NGMIX_ELL_PSFo_NOSHEAR_1 != -10",      lambda x: x["NGMIX_ELL_PSFo_NOSHEAR_1"] != -10),
 ]
 
 # ---------------------------------------------------------------------------
@@ -333,7 +339,8 @@ hp_stats_nocuts = HealpixStats(
     tag="_nocuts"
 )
 
-processors = [cut_counter, cut_cat, hist_processor_masked, hist_processor_nocuts, hp_stats_masked, hp_stats_nocuts]
+#processors = [cut_counter, cut_cat, hist_processor_masked, hist_processor_nocuts, hp_stats_masked, hp_stats_nocuts]
+processors = [cut_counter, hist_processor_masked, hist_processor_nocuts, hp_stats_masked, hp_stats_nocuts]
 
 # ---------------------------------------------------------------------------
 # select mpi or serial

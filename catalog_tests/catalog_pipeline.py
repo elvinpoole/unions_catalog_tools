@@ -98,7 +98,7 @@ class CutCounter(BaseProcessor):
     def process(self, x: np.ndarray, mask: np.ndarray) -> dict:
         n = len(x)
         counts = np.zeros(len(self.cut_defs), dtype=np.int64)
-        for i, (_, func) in enumerate(self.cut_defs):
+        for i, (name, func) in enumerate(self.cut_defs):
             counts[i] = np.count_nonzero(func(x))
         return {
             "individual_counts": counts,
